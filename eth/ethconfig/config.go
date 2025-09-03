@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/consensus/hybrid"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
@@ -173,9 +174,86 @@ func CreateConsensusEngine(config *params.ChainConfig, db ethdb.Database) (conse
 		log.Error("Geth only supports PoS networks. Please transition legacy networks using Geth v1.13.x.")
 		return nil, errors.New("'terminalTotalDifficulty' is not set in genesis block")
 	}
+
 	// Wrap previously supported consensus engines into their post-merge counterpart
 	if config.Clique != nil {
+		// Check if PoS to PoA transition is configured
+		if config.PoSToPoATransitionBlock != nil {
+			transitionBlock := config.PoSToPoATransitionBlock.Uint64()
+
+			// Log startup configuration including transition parameters (Requirement 4.4)
+			log.Info("Configuring PoS to PoA consensus transition",
+				"transitionBlock", transitionBlock,
+				"cliquePeriod", config.Clique.Period,
+				"cliqueEpoch", config.Clique.Epoch,
+				"terminalTotalDifficulty", config.TerminalTotalDifficulty)
+
+			// Log at warn level for high visibility in production
+			log.Warn("CONSENSUS TRANSITION CONFIGURED",
+				"mode", "PoS-to-PoA",
+				"transitionAtBlock", transitionBlock,
+				"currentConsensus", "PoS",
+				"futureConsensus", "PoA")
+
+			// Create hybrid engine that transitions from PoS to PoA at the specified block
+			log.Debug("Creating underlying consensus engines",
+				"posEngineType", "beacon+clique",
+				"poaEngineType", "clique")
+
+			posEngine := beacon.New(clique.New(config.Clique, db))
+			poaEngine := clique.New(config.Clique, db)
+
+			log.Info("Creating hybrid consensus engine with PoS to PoA transition",
+				"transitionBlock", transitionBlock,
+				"posEngine", "beacon+clique",
+				"poaEngine", "clique",
+				"cliquePeriod", config.Clique.Period,
+				"cliqueEpoch", config.Clique.Epoch)
+
+			engine, err := hybrid.New(posEngine, poaEngine, transitionBlock)
+			if err != nil {
+				// Log detailed error information for transition-related failures (Requirement 4.3)
+				log.Error("Failed to create hybrid consensus engine",
+					"transitionBlock", transitionBlock,
+					"cliquePeriod", config.Clique.Period,
+					"cliqueEpoch", config.Clique.Epoch,
+					"error", err)
+				return nil, err
+			}
+
+			log.Info("Successfully created hybrid consensus engine",
+				"transitionBlock", transitionBlock,
+				"engineType", "hybrid",
+				"status", "ready")
+
+			// Log operational information
+			log.Info("Hybrid consensus engine operational parameters",
+				"beforeTransition", "PoS (beacon+clique)",
+				"afterTransition", "PoA (clique)",
+				"transitionTrigger", "block number",
+				"monitoringEnabled", true)
+
+			return engine, nil
+		}
+		// No transition configured, use standard beacon-wrapped clique
+		log.Info("Creating standard beacon-wrapped clique consensus engine",
+			"engineType", "beacon+clique",
+			"cliquePeriod", config.Clique.Period,
+			"cliqueEpoch", config.Clique.Epoch,
+			"transitionConfigured", false)
+		log.Debug("Standard PoS consensus configuration",
+			"consensus", "PoS only",
+			"underlyingEngine", "clique",
+			"transitionSupport", false)
 		return beacon.New(clique.New(config.Clique, db)), nil
 	}
+	// Default to beacon-wrapped ethash faker for non-clique networks
+	log.Info("Creating standard beacon-wrapped ethash consensus engine",
+		"engineType", "beacon+ethash",
+		"transitionConfigured", false)
+	log.Debug("Standard PoS consensus configuration",
+		"consensus", "PoS only",
+		"underlyingEngine", "ethash",
+		"transitionSupport", false)
 	return beacon.New(ethash.NewFaker()), nil
 }

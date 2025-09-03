@@ -436,6 +436,10 @@ type ChainConfig struct {
 	// those cases.
 	EnableVerkleAtGenesis bool `json:"enableVerkleAtGenesis,omitempty"`
 
+	// PoS to PoA transition configuration
+	PoSToPoATransitionBlock *big.Int         `json:"posToPoaTransitionBlock,omitempty"` // Block number to switch from PoS to PoA
+	PoAInitialSigners       []common.Address `json:"poaInitialSigners,omitempty"`       // Initial signers for PoA after transition
+
 	// Various consensus engines
 	Ethash             *EthashConfig       `json:"ethash,omitempty"`
 	Clique             *CliqueConfig       `json:"clique,omitempty"`
@@ -646,6 +650,11 @@ func (c *ChainConfig) IsGrayGlacier(num *big.Int) bool {
 	return isBlockForked(c.GrayGlacierBlock, num)
 }
 
+// IsPoSToPoATransition returns whether num is either equal to the PoS to PoA transition block or greater.
+func (c *ChainConfig) IsPoSToPoATransition(num *big.Int) bool {
+	return isBlockForked(c.PoSToPoATransitionBlock, num)
+}
+
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.
 func (c *ChainConfig) IsTerminalPoWBlock(parentTotalDiff *big.Int, totalDiff *big.Int) bool {
 	if c.TerminalTotalDifficulty == nil {
@@ -851,6 +860,12 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 			}
 		}
 	}
+
+	// Validate PoS to PoA transition configuration
+	if err := c.validatePoSToPoATransition(); err != nil {
+		return fmt.Errorf("invalid PoS to PoA transition configuration: %v", err)
+	}
+
 	return nil
 }
 
@@ -864,6 +879,25 @@ func (bc *BlobConfig) validate() error {
 	if bc.UpdateFraction == 0 {
 		return errors.New("update fraction must be defined and non-zero")
 	}
+	return nil
+}
+
+// validatePoSToPoATransition validates the PoS to PoA transition configuration
+func (c *ChainConfig) validatePoSToPoATransition() error {
+	if c.PoSToPoATransitionBlock == nil {
+		return nil // No transition configured, which is valid
+	}
+
+	// Validate transition block number
+	if c.PoSToPoATransitionBlock.Sign() < 0 {
+		return errors.New("PoS to PoA transition block cannot be negative")
+	}
+
+	// If transition is configured, Clique configuration must be present
+	if c.Clique == nil {
+		return errors.New("PoS to PoA transition requires Clique configuration")
+	}
+
 	return nil
 }
 
@@ -922,6 +956,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	}
 	if isForkBlockIncompatible(c.MergeNetsplitBlock, newcfg.MergeNetsplitBlock, headNumber) {
 		return newBlockCompatError("Merge netsplit fork block", c.MergeNetsplitBlock, newcfg.MergeNetsplitBlock)
+	}
+	if isForkBlockIncompatible(c.PoSToPoATransitionBlock, newcfg.PoSToPoATransitionBlock, headNumber) {
+		return newBlockCompatError("PoS to PoA transition block", c.PoSToPoATransitionBlock, newcfg.PoSToPoATransitionBlock)
 	}
 	if isForkTimestampIncompatible(c.ShanghaiTime, newcfg.ShanghaiTime, headTimestamp) {
 		return newTimestampCompatError("Shanghai fork timestamp", c.ShanghaiTime, newcfg.ShanghaiTime)
