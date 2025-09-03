@@ -536,7 +536,11 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 		return nil, err
 	}
 	if config.Clique != nil && len(g.ExtraData) < 32+crypto.SignatureLength {
-		return nil, errors.New("can't start clique chain without signers")
+		// Allow empty signers if PoS to PoA transition is configured
+		// In this case, signers will be set up during the transition block
+		if config.PoSToPoATransitionBlock == nil {
+			return nil, errors.New("can't start clique chain without signers")
+		}
 	}
 	// flush the data to disk and compute the state root
 	root, err := flushAlloc(&g.Alloc, triedb)

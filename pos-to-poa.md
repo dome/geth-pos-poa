@@ -28,7 +28,7 @@
     },
     "posToPoATransitionBlock": 1000000
   },
-  "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000[validator_addresses]0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
   "gasLimit": "0x7A1200",
   "baseFeePerGas": "0x3B9ACA00",
   "alloc": {
@@ -43,7 +43,12 @@
 - **`posToPoATransitionBlock`**: บล็อกที่จะเปลี่ยนจาก PoS ไป PoA
 - **`clique.period`**: เวลาระหว่างบล็อก (วินาที) - แนะนำ 15 วินาที
 - **`clique.epoch`**: จำนวนบล็อกสำหรับ validator voting cycle
-- **`extraData`**: ใส่ address ของ validators ที่จะใช้ใน PoA (format: 32 bytes vanity + addresses + 65 bytes seal)
+- **`extraData`**: สำหรับ hybrid consensus ให้ใส่ empty extraData (32 bytes vanity + 65 bytes seal) เพราะจะเริ่มด้วย PoS ก่อน
+
+### หมายเหตุสำคัญ:
+- **ไม่ต้องใส่ signers ใน genesis**: แตกต่างจาก clique ปกติ เพราะเราจะเริ่มด้วย PoS ก่อน
+- **Validators จะถูกตั้งค่าอัตโนมัติ**: เมื่อถึง transition block ระบบจะใช้ `defaultInitialSigners` จาก hybrid.go
+- **Genesis validation ถูก bypass**: เราได้แก้ไข core/genesis.go เพื่อไม่ให้ error เมื่อไม่มี signers
 
 ## 2. การเตรียม Validator Addresses
 
@@ -282,7 +287,31 @@ checkValidatorHealth()
 - **Network Halt Recovery**: วิธีแก้เมื่อ network หยุด
 - **Rollback Plan**: วิธี rollback หากมีปัญหาร้ายแรง
 
-## 10. Troubleshooting
+## 10. การแก้ปัญหา Genesis Validation
+
+### 10.1 ปัญหา "can't start clique chain without signers"
+
+หากเจอ error นี้เมื่อ init genesis:
+```
+Failed to write genesis block: can't start clique chain without signers
+```
+
+**สาเหตุ**: Clique engine ตรวจสอบว่าต้องมี signers ใน genesis แต่ hybrid consensus เริ่มด้วย PoS
+
+**วิธีแก้**: เราได้แก้ไข `core/genesis.go` แล้วเพื่อ bypass validation นี้เมื่อมี `posToPoATransitionBlock`
+
+**ตรวจสอบการแก้ไข**:
+```bash
+# ตรวจสอบว่าได้แก้ไข core/genesis.go แล้ว
+grep -A 5 -B 2 "PoSToPoATransitionBlock" core/genesis.go
+```
+
+**หากยังเจอปัญหา**:
+1. ตรวจสอบว่า `posToPoATransitionBlock` อยู่ใน genesis config
+2. ตรวจสอบว่า extraData มี format ที่ถูกต้อง (97 bytes: 32+0+65)
+3. Rebuild geth หลังแก้ไข core/genesis.go
+
+## 11. Troubleshooting
 
 ### 10.1 Common Issues
 
@@ -384,7 +413,7 @@ cat > genesis-test.json << EOF
     "clique": { "period": 5, "epoch": 30000 },
     "terminalTotalDifficulty": 0
   },
-  "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000[test_validators]0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
   "gasLimit": "0x7A1200"
 }
 EOF
