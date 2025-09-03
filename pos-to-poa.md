@@ -70,9 +70,63 @@ var defaultInitialSigners = []common.Address{
 ## 3. การรัน Geth Node
 
 ### 3.1 สำหรับ Validator Node
+
+#### วิธีที่ 1: ใช้ Keystore และ unlock ใน console
 ```bash
 geth init genesis.json --datadir ./validator1
 
+# รัน geth โดยไม่ unlock
+geth --datadir ./validator1 \
+     --networkid 1337 \
+     --mine \
+     --miner.etherbase 0x[validator_address] \
+     --http \
+     --http.addr "0.0.0.0" \
+     --http.port 8545 \
+     --http.api eth,net,web3,personal,miner,clique \
+     --ws \
+     --ws.addr "0.0.0.0" \
+     --ws.port 8546 \
+     --ws.api eth,net,web3,personal,miner,clique \
+     --port 30303 \
+     --bootnodes "enode://[bootnode_info]" \
+     --console
+
+# ใน geth console ให้ unlock account
+personal.unlockAccount("0x[validator_address]", "your_password", 0)
+# หรือใช้ไฟล์ password
+personal.unlockAccount("0x[validator_address]", null, 0)
+```
+
+#### วิธีที่ 2: ใช้ External Signer (แนะนำสำหรับ Production)
+```bash
+# ติดตั้ง clef (external signer)
+clef init
+
+# รัน clef
+clef --keystore ./validator1/keystore --configdir ./clef-config --chainid 1337
+
+# รัน geth โดยใช้ clef
+geth --datadir ./validator1 \
+     --networkid 1337 \
+     --mine \
+     --miner.etherbase 0x[validator_address] \
+     --signer ./clef-config/clef.ipc \
+     --http \
+     --http.addr "0.0.0.0" \
+     --http.port 8545 \
+     --http.api eth,net,web3,clique \
+     --ws \
+     --ws.addr "0.0.0.0" \
+     --ws.port 8546 \
+     --ws.api eth,net,web3,clique \
+     --port 30303 \
+     --bootnodes "enode://[bootnode_info]"
+```
+
+#### วิธีที่ 3: ใช้ Legacy Mode (สำหรับ Testing เท่านั้น)
+```bash
+# หาก geth version รองรับ และต้องการใช้ legacy unlock
 geth --datadir ./validator1 \
      --networkid 1337 \
      --mine \
@@ -112,20 +166,114 @@ geth --datadir ./node1 \
      --console
 ```
 
-### 3.3 ไฟล์ password.txt
+### 3.3 การจัดการ Account และ Password
+
+#### ไฟล์ password.txt (สำหรับ Legacy Mode)
 ```
 your_validator_password_here
 ```
 
-## 4. การตรวจสอบสถานะ Transition
+#### การสร้าง Account ใหม่
+```bash
+# สร้าง account ใหม่
+geth --datadir ./validator1 account new
 
-### 4.1 ตรวจสอบบล็อกปัจจุบัน
+# Import private key
+geth --datadir ./validator1 account import private_key.txt
+
+# List accounts
+geth --datadir ./validator1 account list
+```
+
+#### การใช้ Clef สำหรับ Account Management
+```bash
+# สร้าง clef config
+clef init
+
+# Import account ไป clef
+clef --keystore ./validator1/keystore --configdir ./clef-config setpw 0x[validator_address]
+
+# List accounts ใน clef
+clef --keystore ./validator1/keystore --configdir ./clef-config list-accounts
+```
+
+#### Script สำหรับ Auto-unlock (Development Only)
+```javascript
+// auto-unlock.js
+function autoUnlock() {
+    var account = eth.accounts[0];
+    var password = "your_password_here";
+    
+    if (personal.unlockAccount(account, password, 0)) {
+        console.log("Account", account, "unlocked successfully");
+        return true;
+    } else {
+        console.log("Failed to unlock account", account);
+        return false;
+    }
+}
+
+// เรียกใช้
+autoUnlock();
+```
+
+## 4. แนวทางที่แนะนำสำหรับ Account Management
+
+### 4.1 สำหรับ Development/Testing
+```bash
+# 1. รัน geth ด้วย console
+geth --datadir ./validator1 --networkid 1337 --mine --console
+
+# 2. ใน console unlock account
+personal.unlockAccount("0x[validator_address]", "password", 0)
+
+# 3. เริ่ม mining
+miner.start()
+```
+
+### 4.2 สำหรับ Production (แนะนำ)
+```bash
+# 1. ติดตั้ง clef
+clef init
+
+# 2. รัน clef
+clef --keystore ./validator1/keystore --configdir ./clef-config --chainid 1337 &
+
+# 3. รัน geth ด้วย clef
+geth --datadir ./validator1 \
+     --networkid 1337 \
+     --mine \
+     --miner.etherbase 0x[validator_address] \
+     --signer ./clef-config/clef.ipc \
+     --http \
+     --http.api eth,net,web3,clique
+```
+
+### 4.3 สำหรับ Automated Deployment
+```bash
+# ใช้ environment variables
+export VALIDATOR_PASSWORD="your_secure_password"
+export VALIDATOR_ADDRESS="0x[validator_address]"
+
+# สร้าง unlock script
+cat > unlock.js << EOF
+personal.unlockAccount("$VALIDATOR_ADDRESS", "$VALIDATOR_PASSWORD", 0);
+console.log("Validator account unlocked");
+EOF
+
+# รัน geth ด้วย script
+geth --datadir ./validator1 --networkid 1337 --mine --preload unlock.js console
+```
+
+## 5. การตรวจสอบสถานะ Transition
+
+### 5.1 ตรวจสอบบล็อกปัจจุบัน
 ```javascript
 // ใน geth console
 eth.blockNumber
 ```
 
-### 4.2 ตรวจสอบ Consensus Engine
+### 5.2 ตรวจสอบ Consensus Engine
 ```javascript
 // ก่อน transition: difficulty = 0 (PoS)
 // หลัง transition: difficulty > 0 (PoA)
@@ -137,7 +285,7 @@ var previous = eth.getBlock(latest.number - 1)
 console.log("Block time:", latest.timestamp - previous.timestamp, "seconds")
 ```
 
-### 4.3 ตรวจสอบ Validators (หลัง transition)
+### 5.3 ตรวจสอบ Validators (หลัง transition)
 ```javascript
 // ดู current validators
 clique.getSigners()
@@ -149,27 +297,27 @@ clique.proposals
 clique.getSnapshot()
 ```
 
-## 5. การเตรียมความพร้อมก่อน Transition
+## 6. การเตรียมความพร้อมก่อน Transition
 
-### 5.1 Checklist สำหรับ Validators
+### 6.1 Checklist สำหรับ Validators
 - [ ] ทุก validator node รันและ sync เรียบร้อย
 - [ ] ทุก validator unlock account และพร้อม mine
 - [ ] ตรวจสอบ network connectivity ระหว่าง validators
 - [ ] ทดสอบ mining capability ของแต่ละ validator
 
-### 5.2 Network Coordination
+### 6.2 Network Coordination
 - [ ] แจ้งให้ทุกคนใน network รู้เรื่อง transition
 - [ ] กำหนดเวลา transition ที่ชัดเจน
 - [ ] ให้ทุกคน update geth เป็น version ที่รองรับ hybrid consensus
 - [ ] เตรียม communication channel สำหรับ emergency
 
-### 5.3 Backup และ Safety
+### 6.3 Backup และ Safety
 - [ ] Backup blockchain data ทุก node
 - [ ] เตรียม rollback plan
 - [ ] ทดสอบใน testnet ก่อน
 - [ ] เตรียม monitoring tools
 
-## 6. ระหว่าง Transition (Automatic Process)
+## 7. ระหว่าง Transition (Automatic Process)
 
 เมื่อถึงบล็อกที่กำหนดใน `posToPoATransitionBlock` ระบบจะทำงานอัตโนมัติ:
 
@@ -185,9 +333,9 @@ WARN [timestamp] CONSENSUS TRANSITION: Switched from PoS to PoA consensus atBloc
 INFO [timestamp] Successfully prepared PoS to PoA transition block blockNumber=1000000
 ```
 
-## 7. หลัง Transition
+## 8. หลัง Transition
 
-### 7.1 การตรวจสอบความสำเร็จ
+### 8.1 การตรวจสอบความสำเร็จ
 ```javascript
 // ตรวจสอบว่า transition สำเร็จ
 var currentBlock = eth.getBlock("latest")
@@ -205,7 +353,7 @@ for (var i = 0; i < 10; i++) {
 }
 ```
 
-### 7.2 การจัดการ Validators
+### 8.2 การจัดการ Validators
 
 #### เพิ่ม Validator ใหม่:
 ```javascript
@@ -231,22 +379,22 @@ clique.proposals
 clique.getSnapshot()
 ```
 
-## 8. การ Monitor และ Maintenance
+## 9. การ Monitor และ Maintenance
 
-### 8.1 Log Monitoring
+### 9.1 Log Monitoring
 ตรวจสอบ logs เหล่านี้:
 - Consensus engine selection messages
 - Block production logs
 - Validator voting activities
 - Error และ warning messages
 
-### 8.2 Performance Metrics
+### 9.2 Performance Metrics
 - **Block Time**: ควรสม่ำเสมอตาม clique.period
 - **Network Hash Rate**: จะเป็น 0 หลัง transition (ไม่มี mining)
 - **Transaction Throughput**: ควรคงที่หรือดีขึ้น
 - **Validator Participation**: ทุก validator ควร produce blocks
 
-### 8.3 Health Checks
+### 9.3 Health Checks
 ```javascript
 // ตรวจสอบ validator health
 function checkValidatorHealth() {
@@ -268,28 +416,28 @@ function checkValidatorHealth() {
 checkValidatorHealth()
 ```
 
-## 9. ข้อควรระวัง
+## 10. ข้อควรระวัง
 
-### 9.1 Security Considerations
+### 10.1 Security Considerations
 - **Private Key Security**: Validator private keys ต้องเก็บอย่างปลอดภัย
 - **Decentralization**: ต้องมี validator หลายตัวจากหลาย entity
 - **51% Attack**: ระวัง validator collusion
 - **Network Isolation**: ป้องกัน network partition attacks
 
-### 9.2 Operational Risks
+### 10.2 Operational Risks
 - **Validator Downtime**: หาก validator หลายตัว down พร้อมกัน
 - **Configuration Mismatch**: ทุก node ต้องใช้ genesis เดียวกัน
 - **Clock Synchronization**: เวลาของ validators ต้องตรงกัน
 - **Network Connectivity**: validators ต้อง connect กันได้
 
-### 9.3 Emergency Procedures
+### 10.3 Emergency Procedures
 - **Validator Emergency Stop**: วิธีหยุด validator ฉุกเฉิน
 - **Network Halt Recovery**: วิธีแก้เมื่อ network หยุด
 - **Rollback Plan**: วิธี rollback หากมีปัญหาร้ายแรง
 
-## 10. การแก้ปัญหา Genesis Validation
+## 11. การแก้ปัญหา Genesis Validation
 
-### 10.1 ปัญหา "can't start clique chain without signers"
+### 11.1 ปัญหา "can't start clique chain without signers"
 
 หากเจอ error นี้เมื่อ init genesis:
 ```
@@ -311,9 +459,9 @@ grep -A 5 -B 2 "PoSToPoATransitionBlock" core/genesis.go
 2. ตรวจสอบว่า extraData มี format ที่ถูกต้อง (97 bytes: 32+0+65)
 3. Rebuild geth หลังแก้ไข core/genesis.go
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
-### 10.1 Common Issues
+### 12.1 Common Issues
 
 #### Transition ไม่เกิดขึ้น:
 ```bash
@@ -334,6 +482,50 @@ geth attach --exec "miner.mining"
 
 # ตรวจสอบ etherbase
 geth attach --exec "miner.etherbase"
+
+# ตรวจสอบว่า account unlock หรือไม่
+geth attach --exec "eth.accounts"
+
+# หาก account ไม่ unlock ให้ unlock ใน console
+geth attach --exec "personal.unlockAccount('0x[validator_address]', 'password', 0)"
+```
+
+#### Unlock Flag Deprecated Error:
+```
+Error: The "unlock" flag has been deprecated and has no effect
+```
+
+**สาเหตุ**: geth version ใหม่ไม่รองรับ --unlock flag แล้ว
+
+**วิธีแก้**:
+1. **ใช้ Console Unlock** (แนะนำสำหรับ Development):
+```bash
+# รัน geth โดยไม่ใช้ --unlock
+geth --datadir ./validator1 --networkid 1337 --mine --console
+
+# ใน console
+personal.unlockAccount("0x[validator_address]", "password", 0)
+```
+
+2. **ใช้ Clef External Signer** (แนะนำสำหรับ Production):
+```bash
+# ติดตั้งและรัน clef
+clef init
+clef --keystore ./validator1/keystore --configdir ./clef-config --chainid 1337
+
+# รัน geth ด้วย clef
+geth --datadir ./validator1 --signer ./clef-config/clef.ipc --mine
+```
+
+3. **ใช้ Programmatic Unlock**:
+```javascript
+// สร้าง script สำหรับ unlock
+// unlock.js
+personal.unlockAccount(eth.accounts[0], "password", 0);
+console.log("Account unlocked");
+
+// รัน script
+geth --datadir ./validator1 --networkid 1337 --mine --exec "loadScript('unlock.js')" console
 ```
 
 #### Block time ไม่สม่ำเสมอ:
@@ -368,7 +560,7 @@ geth attach --exec "debug.verbosity(4)" # เพิ่ม log level
 tail -f geth.log | grep -i "consensus\|hybrid\|transition"
 ```
 
-### 10.2 Recovery Procedures
+### 12.2 Recovery Procedures
 
 #### หาก Network หยุด:
 1. ตรวจสอบ validator connectivity
@@ -383,41 +575,41 @@ tail -f geth.log | grep -i "consensus\|hybrid\|transition"
 4. ทดสอบใน testnet อีกครั้ง
 5. กำหนด transition block ใหม่
 
-## 11. ไฟล์สำคัญที่ต้องแก้ไข
+## 13. ไฟล์สำคัญที่ต้องแก้ไข
 
-### 11.1 Core Files
+### 13.1 Core Files
 - **`genesis.json`**: เพิ่ม `posToPoATransitionBlock` และ clique config
 - **`consensus/hybrid/hybrid.go`**: แก้ `defaultInitialSigners`
 - **`password.txt`**: password สำหรับ unlock validator accounts
 
-### 11.2 Configuration Files
+### 13.2 Configuration Files
 - **Node startup scripts**: กำหนด parameters สำหรับ validator และ regular nodes
 - **Monitoring scripts**: สำหรับตรวจสอบ network health
 - **Backup scripts**: สำหรับ backup blockchain data
 
-## 12. Best Practices
+## 14. Best Practices
 
-### 12.1 Pre-Transition
+### 14.1 Pre-Transition
 - ทดสอบใน testnet หลายครั้ง
 - เตรียม documentation สำหรับทุกคนใน network
 - กำหนด communication protocol สำหรับ emergency
 - เตรียม monitoring dashboard
 
-### 12.2 During Transition
+### 14.2 During Transition
 - Monitor logs อย่างใกล้ชิด
 - เตรียม rollback plan
 - มี technical team standby
 - ติดตาม network metrics
 
-### 12.3 Post-Transition
+### 14.3 Post-Transition
 - Monitor validator performance
 - ตรวจสอบ block time consistency
 - ติดตาม transaction throughput
 - เตรียม validator rotation plan
 
-## 13. การทดสอบ
+## 15. การทดสอบ
 
-### 13.1 Testnet Setup
+### 15.1 Testnet Setup
 ```bash
 # สร้าง testnet สำหรับทดสอบ
 mkdir testnet && cd testnet
@@ -441,7 +633,7 @@ geth init genesis-test.json --datadir ./testdata
 geth --datadir ./testdata --networkid 9999 --mine --console
 ```
 
-### 13.2 Test Scenarios
+### 15.2 Test Scenarios
 1. **Normal Transition**: ทดสอบ transition ปกติ
 2. **Validator Failure**: ทดสอบเมื่อ validator บางตัว fail
 3. **Network Partition**: ทดสอบเมื่อ network แยก
