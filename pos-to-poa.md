@@ -350,6 +350,24 @@ function checkBlockTimes() {
 }
 ```
 
+#### Extra Data Vanity Prefix Missing Error:
+```
+Error: "extra-data 32 byte vanity prefix missing"
+```
+
+**สาเหตุ**: เกิดขึ้นเมื่อ PoS blocks ถูก verify ด้วย PoA engine ระหว่าง chain reorganization
+
+**วิธีแก้**: 
+- Hybrid engine จะจัดการอัตโนมัติโดยใช้ engine ที่ถูกต้องตาม block number
+- ไม่ใช่ปัญหาที่ต้องแก้ไขด้วยตนเอง เป็น expected behavior
+- หาก error ยังคงเกิดขึ้น ให้ตรวจสอบ hybrid engine configuration
+
+```bash
+# ตรวจสอบ hybrid engine logs
+geth attach --exec "debug.verbosity(4)" # เพิ่ม log level
+tail -f geth.log | grep -i "consensus\|hybrid\|transition"
+```
+
 ### 10.2 Recovery Procedures
 
 #### หาก Network หยุด:

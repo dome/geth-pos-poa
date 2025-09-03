@@ -190,13 +190,22 @@ func (h *Hybrid) selectEngineFromHeader(header *types.Header) consensus.Engine {
 
 // Author implements consensus.Engine, returning the verified author of the block.
 func (h *Hybrid) Author(header *types.Header) (common.Address, error) {
-	engine := h.selectEngineFromHeader(header)
+	blockNumber := header.Number.Uint64()
+
+	// Use the correct engine based on block number, not current state
+	var engine consensus.Engine
+	if blockNumber < h.transitionBlock {
+		engine = h.posEngine
+	} else {
+		engine = h.poaEngine
+	}
+
 	author, err := engine.Author(header)
 
 	// Log detailed error information for transition-related failures (Requirement 4.3)
 	if err != nil {
 		log.Error("Failed to get block author",
-			"blockNumber", header.Number.Uint64(),
+			"blockNumber", blockNumber,
 			"blockHash", header.Hash().Hex(),
 			"engine", fmt.Sprintf("%T", engine),
 			"transitionBlock", h.transitionBlock,
@@ -209,17 +218,37 @@ func (h *Hybrid) Author(header *types.Header) (common.Address, error) {
 // VerifyHeader checks whether a header conforms to the consensus rules of the
 // appropriate engine based on block number.
 func (h *Hybrid) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header) error {
-	engine := h.selectEngineFromHeader(header)
+	blockNumber := header.Number.Uint64()
+
+	// Special handling for transition boundary: if we're verifying a PoS block
+	// but the current consensus is PoA (e.g., during chain reorg), we need to
+	// use the PoS engine for verification
+	if blockNumber < h.transitionBlock {
+		// This is a PoS block, always use PoS engine regardless of current state
+		err := h.posEngine.VerifyHeader(chain, header)
+		if err != nil {
+			log.Error("PoS header verification failed",
+				"blockNumber", blockNumber,
+				"blockHash", header.Hash().Hex(),
+				"engine", fmt.Sprintf("%T", h.posEngine),
+				"transitionBlock", h.transitionBlock,
+				"error", err)
+		}
+		return err
+	}
+
+	// For blocks at or after transition, use PoA engine
+	engine := h.poaEngine
 	err := engine.VerifyHeader(chain, header)
 
 	// Log detailed error information for transition-related failures (Requirement 4.3)
 	if err != nil {
 		log.Error("Header verification failed",
-			"blockNumber", header.Number.Uint64(),
+			"blockNumber", blockNumber,
 			"blockHash", header.Hash().Hex(),
 			"engine", fmt.Sprintf("%T", engine),
 			"transitionBlock", h.transitionBlock,
-			"isAfterTransition", header.Number.Uint64() >= h.transitionBlock,
+			"isAfterTransition", blockNumber >= h.transitionBlock,
 			"error", err)
 	}
 
@@ -229,9 +258,6 @@ func (h *Hybrid) VerifyHeader(chain consensus.ChainHeaderReader, header *types.H
 // VerifyHeaders is similar to VerifyHeader, but verifies a batch of headers
 // concurrently using the appropriate engine for each header.
 func (h *Hybrid) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
-	// For batch verification, we need to handle the case where headers might span
-	// the transition boundary. We'll delegate to the appropriate engine based on
-	// the first header, but this could be optimized in the future.
 	if len(headers) == 0 {
 		// Return channels that immediately close for empty input
 		quit := make(chan struct{})
@@ -241,24 +267,69 @@ func (h *Hybrid) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*typ
 		return quit, results
 	}
 
-	engine := h.selectEngineFromHeader(headers[0])
-	return engine.VerifyHeaders(chain, headers)
+	// Check if headers span the transition boundary
+	firstBlock := headers[0].Number.Uint64()
+	lastBlock := headers[len(headers)-1].Number.Uint64()
+
+	// If all headers are before transition, use PoS engine
+	if lastBlock < h.transitionBlock {
+		return h.posEngine.VerifyHeaders(chain, headers)
+	}
+
+	// If all headers are at or after transition, use PoA engine
+	if firstBlock >= h.transitionBlock {
+		return h.poaEngine.VerifyHeaders(chain, headers)
+	}
+
+	// Headers span the transition boundary - we need to split them
+	// and verify each group with the appropriate engine
+	quit := make(chan struct{})
+	results := make(chan error, len(headers))
+
+	go func() {
+		defer close(results)
+
+		for _, header := range headers {
+			select {
+			case <-quit:
+				return
+			default:
+				err := h.VerifyHeader(chain, header)
+				select {
+				case results <- err:
+				case <-quit:
+					return
+				}
+			}
+		}
+	}()
+
+	return quit, results
 }
 
 // VerifyUncles verifies that the given block's uncles conform to the consensus
 // rules of the appropriate engine.
 func (h *Hybrid) VerifyUncles(chain consensus.ChainReader, block *types.Block) error {
-	engine := h.selectEngineFromHeader(block.Header())
+	blockNumber := block.Number().Uint64()
+
+	// Use the correct engine based on block number, not current state
+	var engine consensus.Engine
+	if blockNumber < h.transitionBlock {
+		engine = h.posEngine
+	} else {
+		engine = h.poaEngine
+	}
+
 	err := engine.VerifyUncles(chain, block)
 
 	// Log detailed error information for transition-related failures (Requirement 4.3)
 	if err != nil {
 		log.Error("Uncle verification failed",
-			"blockNumber", block.Number().Uint64(),
+			"blockNumber", blockNumber,
 			"blockHash", block.Hash().Hex(),
 			"engine", fmt.Sprintf("%T", engine),
 			"transitionBlock", h.transitionBlock,
-			"isAfterTransition", block.Number().Uint64() >= h.transitionBlock,
+			"isAfterTransition", blockNumber >= h.transitionBlock,
 			"uncleCount", len(block.Uncles()),
 			"error", err)
 	}
